@@ -372,6 +372,7 @@ public class CommitLogSegmentReader implements Iterable<CommitLogSegmentReader.S
 
             try
             {
+                // AEAD (GCM) reads a fresh IV per block, so there is no single decryptor to build up front.
                 cipher = encryptionContext.usesPerBlockIV() ? null : encryptionContext.getDecryptor();
             }
             catch (IOException ioe)

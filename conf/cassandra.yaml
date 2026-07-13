@@ -1774,8 +1774,10 @@ user_defined_functions_enabled: false
 transparent_data_encryption_options:
   enabled: false
   chunk_length_kb: 64
-  # Supported transformations are provided by the configured JCE provider. Cassandra supports
-  # AES/CBC/PKCS5Padding with a file-level IV and AES/GCM/NoPadding with a per-block IV.
+  # Supported transformations are provided by the configured JCE provider.
+  # Cassandra supports AES/CBC/PKCS5Padding with a file-level IV and
+  # AES/GCM/NoPadding (authenticated encryption) with a per-block IV.
+  # GCM authentication tag is 128 bits. Use a 256-bit key in the keystore for AES-256.
   # For GCM, rotate keys well before 2^32 encrypted blocks are written with the same key.
   cipher: AES/CBC/PKCS5Padding
   key_alias: testing:1

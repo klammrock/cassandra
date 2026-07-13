@@ -137,6 +137,9 @@ public class EncryptedSegment extends FileDirectSegment
                          : EncryptionUtils.encryptAndWrite(buffer, channel, true, cipher);
 
                 contentStart += nextBlockSize;
+                // account for the exact bytes written for this block: block header + ciphertext, plus the per-block IV
+                // header for AEAD (GCM). Deriving this from the channel position keeps CBC accounting unchanged while
+                // correctly including the AEAD IV bytes, so the manager's tracked on-disk size cannot drift.
                 manager.addSize(channel.position() - blockStart);
             }
 

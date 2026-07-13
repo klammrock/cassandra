@@ -23,6 +23,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Map;
+import javax.annotation.Nullable;
 import javax.crypto.Cipher;
 
 import org.slf4j.Logger;
@@ -37,8 +38,6 @@ import org.apache.cassandra.io.util.SimpleCachedBufferPool;
 import org.apache.cassandra.security.EncryptionContext;
 import org.apache.cassandra.security.EncryptionUtils;
 import org.apache.cassandra.utils.Hex;
-
-import static org.apache.cassandra.security.EncryptionUtils.ENCRYPTED_BLOCK_HEADER_SIZE;
 
 /**
  * Writes encrypted segments to disk. Data is compressed before encrypting to (hopefully) reduce the size of the data into
@@ -67,6 +66,7 @@ public class EncryptedSegment extends FileDirectSegment
     private static final int ENCRYPTED_SECTION_HEADER_SIZE = SYNC_MARKER_SIZE + 4;
 
     private final EncryptionContext encryptionContext;
+    @Nullable
     private final Cipher cipher;
 
     public EncryptedSegment(AbstractCommitLogSegmentManager manager, ThrowingFunction<Path, FileChannel, IOException> channelFactory)
@@ -76,12 +76,16 @@ public class EncryptedSegment extends FileDirectSegment
 
         try
         {
-            cipher = encryptionContext.getEncryptor();
+            cipher = encryptionContext.usesPerBlockIV() ? null : encryptionContext.getEncryptor();
         }
         catch (IOException e)
         {
             throw new FSWriteError(e, logFile);
         }
+
+        if (cipher == null && !encryptionContext.usesPerBlockIV())
+            throw new IllegalStateException("cipher must not be null for non-GCM encrypted commit log");
+
         logger.debug("created a new encrypted commit log segment: {}", logFile);
     }
 
@@ -89,6 +93,8 @@ public class EncryptedSegment extends FileDirectSegment
     {
         Map<String, String> map = encryptionContext.toHeaderParameters();
         map.put(EncryptionContext.ENCRYPTION_IV, Hex.bytesToHex(cipher.getIV()));
+        if (!encryptionContext.usesPerBlockIV())
+            map.put(EncryptionContext.ENCRYPTION_IV, Hex.bytesToHex(cipher.getIV()));
         return map;
     }
 
@@ -125,10 +131,13 @@ public class EncryptedSegment extends FileDirectSegment
                 buffer = EncryptionUtils.compress(slice, buffer, true, compressor);
 
                 // reuse the same buffer for the input and output of the encryption operation
-                buffer = EncryptionUtils.encryptAndWrite(buffer, channel, true, cipher);
+                final long blockStart = channel.position();
+                buffer = encryptionContext.usesPerBlockIV()
+                         ? EncryptionUtils.encryptAndWrite(buffer, channel, true, encryptionContext)
+                         : EncryptionUtils.encryptAndWrite(buffer, channel, true, cipher);
 
                 contentStart += nextBlockSize;
-                manager.addSize(buffer.limit() + ENCRYPTED_BLOCK_HEADER_SIZE);
+                manager.addSize(channel.position() - blockStart);
             }
 
             lastWrittenPos = channel.position();

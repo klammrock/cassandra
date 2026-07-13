@@ -21,6 +21,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.WritableByteChannel;
+import java.util.zip.CRC32;
+
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
 import javax.crypto.IllegalBlockSizeException;
@@ -37,6 +39,8 @@ import org.apache.cassandra.io.compress.ICompressor;
 import org.apache.cassandra.io.util.ChannelProxy;
 import org.apache.cassandra.io.util.FileDataInput;
 import org.apache.cassandra.utils.ByteBufferUtil;
+
+import static org.apache.cassandra.utils.FBUtilities.updateChecksum;
 
 /**
  * Encryption and decryption functions specific to the commit log.
@@ -92,6 +96,16 @@ public class EncryptionUtils
      */
     public static ByteBuffer encryptAndWrite(ByteBuffer inputBuffer, WritableByteChannel channel, boolean allowBufferResize, Cipher cipher) throws IOException
     {
+        return encryptAndWrite(inputBuffer, channel, allowBufferResize, cipher, false, null);
+    }
+
+    public static ByteBuffer encryptAndWrite(ByteBuffer inputBuffer, WritableByteChannel channel, boolean allowBufferResize, EncryptionContext encryptionContext) throws IOException
+    {
+        return encryptAndWrite(inputBuffer, channel, allowBufferResize, encryptionContext.getEncryptor(), encryptionContext.usesPerBlockIV(), null);
+    }
+
+    private static ByteBuffer encryptAndWrite(ByteBuffer inputBuffer, WritableByteChannel channel, boolean allowBufferResize, Cipher cipher, boolean writeIV, CRC32 crc) throws IOException
+    {
         final int plainTextLength = inputBuffer.remaining();
         final int encryptLength = cipher.getOutputSize(plainTextLength);
         ByteBuffer outputBuffer = inputBuffer.duplicate();
@@ -99,10 +113,21 @@ public class EncryptionUtils
 
         // it's unfortunate that we need to allocate a small buffer here just for the headers, but if we reuse the input buffer
         // for the output, then we would overwrite the first n bytes of the real data with the header data.
-        ByteBuffer intBuf = ByteBuffer.allocate(ENCRYPTED_BLOCK_HEADER_SIZE);
-        intBuf.putInt(0, encryptLength);
-        intBuf.putInt(4, plainTextLength);
-        channel.write(intBuf);
+        byte[] iv = writeIV ? cipher.getIV() : null;
+        ByteBuffer headerBuffer = ByteBuffer.allocate(encryptedBlockHeaderSize(iv));
+        headerBuffer.putInt(encryptLength);
+        headerBuffer.putInt(plainTextLength);
+        if (writeIV)
+        {
+            headerBuffer.putInt(iv.length);
+            headerBuffer.put(iv);
+        }
+        headerBuffer.flip();
+        if (writeIV)
+            cipher.updateAAD(headerBuffer.duplicate());
+        if (crc != null)
+            updateChecksum(crc, headerBuffer);
+        channel.write(headerBuffer);
 
         try
         {
@@ -114,6 +139,8 @@ public class EncryptionUtils
         }
 
         outputBuffer.position(0).limit(encryptLength);
+        if (crc != null)
+            updateChecksum(crc, outputBuffer);
         channel.write(outputBuffer);
         outputBuffer.position(0).limit(encryptLength);
 

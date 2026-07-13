@@ -1758,9 +1758,13 @@ user_defined_functions_enabled: false
 transparent_data_encryption_options:
   enabled: false
   chunk_length_kb: 64
+  # Supported transformations are provided by the configured JCE provider. Cassandra supports
+  # AES/CBC/PKCS5Padding with a file-level IV and AES/GCM/NoPadding with a per-block IV.
+  # For GCM, rotate keys well before 2^32 encrypted blocks are written with the same key.
   cipher: AES/CBC/PKCS5Padding
   key_alias: testing:1
   # CBC IV length for AES needs to be 16 bytes (which is also the default size)
+  # GCM IV length should be 12 bytes.
   # iv_length: 16
   key_provider:
     - class_name: org.apache.cassandra.security.JKSKeyProvider

@@ -51,6 +51,7 @@ public class EncryptionContext
 
     private final byte[] iv;
     private final int chunkLength;
+    private final boolean perBlockIV;
 
     public EncryptionContext()
     {
@@ -69,6 +70,7 @@ public class EncryptionContext
         compressor = LZ4Compressor.create(Collections.<String, String>emptyMap());
         chunkLength = tdeOptions.chunk_length_kb * 1024;
         this.iv = iv;
+        perBlockIV = isAEAD(tdeOptions.cipher);
 
         // always attempt to load the cipher factory, as we could be in the situation where the user has disabled encryption,
         // but has existing commitlogs and sstables on disk that are still encrypted (and still need to be read)
@@ -103,6 +105,13 @@ public class EncryptionContext
     {
         if (iv == null || iv.length == 0)
             throw new IllegalStateException("no initialization vector (IV) found in this context");
+        return getDecryptor(iv);
+    }
+
+    public Cipher getDecryptor(byte[] iv) throws IOException
+    {
+        if (iv == null || iv.length == 0)
+            throw new IllegalStateException("no initialization vector (IV) found in this context");
         return cipherFactory.getDecryptor(tdeOptions.cipher, tdeOptions.key_alias, iv);
     }
 
@@ -119,6 +128,11 @@ public class EncryptionContext
     public byte[] getIV()
     {
         return iv;
+    }
+
+    public boolean usesPerBlockIV()
+    {
+        return perBlockIV;
     }
 
     /**

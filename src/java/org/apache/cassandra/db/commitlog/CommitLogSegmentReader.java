@@ -337,6 +337,7 @@ public class CommitLogSegmentReader implements Iterable<CommitLogSegmentReader.S
     static class EncryptedSegmenter implements Segmenter
     {
         private final RandomAccessReader reader;
+        private final EncryptionContext encryptionContext;
         private final ICompressor compressor;
         private final Cipher cipher;
 
@@ -364,25 +365,31 @@ public class CommitLogSegmentReader implements Iterable<CommitLogSegmentReader.S
         EncryptedSegmenter(final RandomAccessReader reader, EncryptionContext encryptionContext)
         {
             this.reader = reader;
+            this.encryptionContext = encryptionContext;
             decryptedBuffer = ByteBuffer.allocate(0);
             compressor = encryptionContext.getCompressor();
             nextLogicalStart = reader.getFilePointer();
 
             try
             {
-                cipher = encryptionContext.getDecryptor();
+                cipher = encryptionContext.usesPerBlockIV() ? null : encryptionContext.getDecryptor();
             }
             catch (IOException ioe)
             {
                 throw new FSReadError(ioe, reader.getPath());
             }
 
+            if (cipher == null && !encryptionContext.usesPerBlockIV())
+                throw new IllegalStateException("cipher must not be null for non-GCM encrypted commit log");
+
             chunkProvider = () -> {
                 if (reader.getFilePointer() >= currentSegmentEndPosition)
                     return ByteBufferUtil.EMPTY_BYTE_BUFFER;
                 try
                 {
-                    decryptedBuffer = EncryptionUtils.decrypt(reader, decryptedBuffer, true, cipher);
+                    decryptedBuffer = encryptionContext.usesPerBlockIV()
+                                      ? EncryptionUtils.decrypt(reader, decryptedBuffer, true, encryptionContext)
+                                      : EncryptionUtils.decrypt(reader, decryptedBuffer, true, cipher);
                     uncompressedBuffer = EncryptionUtils.uncompress(decryptedBuffer, uncompressedBuffer, true, compressor);
                     return uncompressedBuffer;
                 }

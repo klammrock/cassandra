@@ -26,9 +26,12 @@ import javax.crypto.Cipher;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.ShortBufferException;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 
 import io.netty.util.concurrent.FastThreadLocal;
+
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.commitlog.EncryptedSegment;
 import org.apache.cassandra.io.compress.ICompressor;
 import org.apache.cassandra.io.util.ChannelProxy;
@@ -45,6 +48,8 @@ public class EncryptionUtils
 {
     public static final int COMPRESSED_BLOCK_HEADER_SIZE = 4;
     public static final int ENCRYPTED_BLOCK_HEADER_SIZE = 8;
+    private static final int ENCRYPTED_BLOCK_IV_LENGTH_SIZE = 4;
+    private static final int MAX_ENCRYPTED_BLOCK_IV_LENGTH = 256;
 
     private static final FastThreadLocal<ByteBuffer> reusableBuffers = new FastThreadLocal<ByteBuffer>()
     {
@@ -121,6 +126,11 @@ public class EncryptionUtils
         return encryptAndWrite(inputBuffer, new ChannelAdapter(outputBuffer), allowBufferResize, cipher);
     }
 
+    public static ByteBuffer decrypt(ReadableByteChannel channel, ByteBuffer outputBuffer, boolean allowBufferResize, EncryptionContext encryptionContext) throws IOException
+    {
+        return decrypt(channel, outputBuffer, allowBufferResize, null, encryptionContext);
+    }
+
     /**
      * Decrypt the input data, as well as manage sizing of the {@code outputBuffer}; if the buffer is not big enough,
      * deallocate current, and allocate a large enough buffer.
@@ -130,30 +140,50 @@ public class EncryptionUtils
      */
     public static ByteBuffer decrypt(ReadableByteChannel channel, ByteBuffer outputBuffer, boolean allowBufferResize, Cipher cipher) throws IOException
     {
-        ByteBuffer metadataBuffer = reusableBuffers.get();
-        if (metadataBuffer.capacity() < ENCRYPTED_BLOCK_HEADER_SIZE)
-        {
-            metadataBuffer = ByteBufferUtil.ensureCapacity(metadataBuffer, ENCRYPTED_BLOCK_HEADER_SIZE, true);
-            reusableBuffers.set(metadataBuffer);
-        }
+        return decrypt(channel, outputBuffer, allowBufferResize, cipher, null);
+    }
 
-        metadataBuffer.position(0).limit(ENCRYPTED_BLOCK_HEADER_SIZE);
-        channel.read(metadataBuffer);
-        if (metadataBuffer.remaining() < ENCRYPTED_BLOCK_HEADER_SIZE)
-            throw new IllegalStateException("could not read encrypted blocked metadata header");
+    private static ByteBuffer decrypt(ReadableByteChannel channel, ByteBuffer outputBuffer, boolean allowBufferResize, Cipher cipher, EncryptionContext encryptionContext) throws IOException
+    {
+        ByteBuffer metadataBuffer = ByteBuffer.wrap(readFully(channel, ENCRYPTED_BLOCK_HEADER_SIZE));
         int encryptedLength = metadataBuffer.getInt();
         // this is the length of the compressed data
         int plainTextLength = metadataBuffer.getInt();
+        validateEncryptedBlockLengths(encryptedLength, plainTextLength);
+        ByteBuffer aad = null;
+        if (encryptionContext != null)
+        {
+            if (encryptionContext.usesPerBlockIV())
+            {
+                int ivLength = ByteBuffer.wrap(readFully(channel, ENCRYPTED_BLOCK_IV_LENGTH_SIZE)).getInt();
+                if (ivLength <= 0 || ivLength > MAX_ENCRYPTED_BLOCK_IV_LENGTH)
+                    throw new IOException("invalid encrypted block IV length: " + ivLength);
+                byte[] iv = readFully(channel, ivLength);
+                cipher = encryptionContext.getDecryptor(iv);
+                aad = ByteBuffer.allocate(encryptedBlockHeaderSize(iv));
+                aad.putInt(encryptedLength);
+                aad.putInt(plainTextLength);
+                aad.putInt(ivLength);
+                aad.put(iv);
+                aad.flip();
+            }
+            else
+            {
+                cipher = encryptionContext.getDecryptor();
+            }
+        }
 
         outputBuffer = ByteBufferUtil.ensureCapacity(outputBuffer, Math.max(plainTextLength, encryptedLength), allowBufferResize);
         outputBuffer.position(0).limit(encryptedLength);
-        channel.read(outputBuffer);
+        readFully(channel, outputBuffer);
 
         ByteBuffer dupe = outputBuffer.duplicate();
         dupe.clear();
 
         try
         {
+            if (aad != null)
+                cipher.updateAAD(aad);
             cipher.doFinal(outputBuffer, dupe);
         }
         catch (ShortBufferException | IllegalBlockSizeException | BadPaddingException e)
@@ -169,6 +199,66 @@ public class EncryptionUtils
     public static ByteBuffer decrypt(FileDataInput fileDataInput, ByteBuffer outputBuffer, boolean allowBufferResize, Cipher cipher) throws IOException
     {
         return decrypt(new DataInputReadChannel(fileDataInput), outputBuffer, allowBufferResize, cipher);
+    }
+
+    public static ByteBuffer decrypt(FileDataInput fileDataInput, ByteBuffer outputBuffer, boolean allowBufferResize, EncryptionContext encryptionContext) throws IOException
+    {
+        return decrypt(new DataInputReadChannel(fileDataInput), outputBuffer, allowBufferResize, encryptionContext);
+    }
+
+    private static int encryptedBlockHeaderSize(byte[] iv)
+    {
+        return iv == null
+               ? ENCRYPTED_BLOCK_HEADER_SIZE
+               : ENCRYPTED_BLOCK_HEADER_SIZE + ENCRYPTED_BLOCK_IV_LENGTH_SIZE + iv.length;
+    }
+
+    private static void validateEncryptedBlockLengths(int encryptedLength, int plainTextLength) throws IOException
+    {
+        long maxBlockLength = Math.max(1L, DatabaseDescriptor.getCommitLogSegmentSize()) * 2L;
+        if (encryptedLength <= 0 || plainTextLength <= 0 || encryptedLength < plainTextLength ||
+            encryptedLength > maxBlockLength || plainTextLength > maxBlockLength)
+        {
+            throw new IOException("invalid encrypted block lengths: encrypted=" + encryptedLength +
+                                  ", plaintext=" + plainTextLength +
+                                  ", max=" + maxBlockLength);
+        }
+    }
+
+    @VisibleForTesting
+    static byte[] readFully(ReadableByteChannel channel, int length) throws IOException
+    {
+        byte[] dst = new byte[length];
+        readFully(channel, dst, 0, length);
+        return dst;
+    }
+
+    private static void readFully(ReadableByteChannel channel, ByteBuffer dst) throws IOException
+    {
+        int length = dst.remaining();
+        if (dst.hasArray())
+        {
+            int position = dst.position();
+            readFully(channel, dst.array(), dst.arrayOffset() + position, length);
+            dst.position(position).limit(position + length);
+        }
+        else
+        {
+            dst.put(readFully(channel, length));
+            dst.flip();
+        }
+    }
+
+    private static void readFully(ReadableByteChannel channel, byte[] dst, int offset, int length) throws IOException
+    {
+        int readTotal = 0;
+        while (readTotal < length)
+        {
+            int read = channel.read(ByteBuffer.wrap(dst, offset + readTotal, length - readTotal));
+            if (read <= 0)
+                throw new IOException("premature end of encrypted block: expected " + length + " bytes but read " + readTotal);
+            readTotal += read;
+        }
     }
 
     /**

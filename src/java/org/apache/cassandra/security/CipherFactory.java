@@ -24,10 +24,12 @@ import java.security.InvalidKeyException;
 import java.security.Key;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
 import java.util.Arrays;
 import java.util.concurrent.CompletionException;
 import javax.crypto.Cipher;
 import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.IvParameterSpec;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -49,6 +51,12 @@ import org.apache.cassandra.config.TransparentDataEncryptionOptions;
 public class CipherFactory
 {
     private final Logger logger = LoggerFactory.getLogger(CipherFactory.class);
+
+    /**
+     * Authentication tag length (in bits) used for AEAD ciphers (i.e. {@code AES/GCM/...}). 128 is the maximum
+     * (and recommended) GCM tag length.
+     */
+    public static final int GCM_TAG_LENGTH_BITS = 128;
 
     /**
      * Keep around thread local instances of Cipher as they are quite expensive to instantiate (@code Cipher#getInstance).
@@ -124,8 +132,10 @@ public class CipherFactory
 
             Key key = retrieveKey(keyAlias);
             Cipher cipher = Cipher.getInstance(transformation);
-            cipher.init(cipherMode, key, new IvParameterSpec(iv));
-            cipherThreadLocal.set(new CachedCipher(cipherMode, keyAlias, cipher));
+            cipher.init(cipherMode, key, parameterSpec(transformation, iv));
+            if (!EncryptionContext.isAEAD(transformation))
+                // Useless for GCM. Every block creates new cipher with new IV.
+                cipherThreadLocal.set(new CachedCipher(cipherMode, keyAlias, cipher));
             return cipher;
         }
         catch (NoSuchAlgorithmException | NoSuchPaddingException | InvalidAlgorithmParameterException | InvalidKeyException e)
@@ -133,6 +143,14 @@ public class CipherFactory
             logger.error("could not build cipher", e);
             throw new IOException("cannot load cipher", e);
         }
+    }
+
+    private static AlgorithmParameterSpec parameterSpec(String transformation, byte[] iv)
+    {
+        // AEAD ciphers (GCM) require a GCMParameterSpec carrying the auth-tag length; they reject an IvParameterSpec.
+        if (EncryptionContext.isAEAD(transformation))
+            return new GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv);
+        return new IvParameterSpec(iv);
     }
 
     private Key retrieveKey(String keyAlias) throws IOException

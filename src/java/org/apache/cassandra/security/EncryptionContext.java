@@ -21,8 +21,11 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.IvParameterSpec;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Objects;
@@ -116,6 +119,15 @@ public class EncryptionContext
     public byte[] getIV()
     {
         return iv;
+    }
+
+    /**
+     * @return true if the cipher transformation uses an AEAD mode that requires a {@link GCMParameterSpec} (rather than
+     * a plain {@link IvParameterSpec}) and a unique IV for every encryption operation. Currently only GCM.
+     */
+    public static boolean isAEAD(String transformation)
+    {
+        return transformation != null && transformation.toUpperCase(Locale.ROOT).contains("/GCM/");
     }
 
     public TransparentDataEncryptionOptions getTransparentDataEncryptionOptions()

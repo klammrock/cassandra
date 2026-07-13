@@ -21,20 +21,24 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.zip.CRC32;
+import javax.annotation.Nullable;
 import javax.crypto.Cipher;
 
 import com.google.common.annotations.VisibleForTesting;
 
-import org.apache.cassandra.io.util.File;
-import org.apache.cassandra.security.EncryptionUtils;
 import org.apache.cassandra.io.compress.ICompressor;
+import org.apache.cassandra.io.util.File;
+import org.apache.cassandra.security.EncryptionContext;
+import org.apache.cassandra.security.EncryptionUtils;
 
 import static org.apache.cassandra.utils.FBUtilities.updateChecksum;
 
 public class EncryptedHintsWriter extends HintsWriter
 {
+    @Nullable
     private final Cipher cipher;
     private final ICompressor compressor;
+    private final EncryptionContext encryptionContext;
     private volatile ByteBuffer byteBuffer;
 
     protected EncryptedHintsWriter(File directory, HintsDescriptor descriptor, File file, FileChannel channel, int fd, CRC32 globalCRC)
@@ -42,13 +46,20 @@ public class EncryptedHintsWriter extends HintsWriter
         super(directory, descriptor, file, channel, fd, globalCRC);
         cipher = descriptor.getCipher();
         compressor = descriptor.createCompressor();
+        encryptionContext = descriptor.getEncryptionContext();
+        if (cipher == null && !encryptionContext.usesPerBlockIV())
+            throw new IllegalStateException("cipher must not be null for non-GCM encrypted hints");
+        if (compressor == null)
+            throw new IllegalStateException("compressor must not be null for encrypted hints");
     }
 
     protected void writeBuffer(ByteBuffer input) throws IOException
     {
         byteBuffer = EncryptionUtils.compress(input, byteBuffer, true, compressor);
-        ByteBuffer output = EncryptionUtils.encryptAndWrite(byteBuffer, channel, true, cipher);
-        updateChecksum(globalCRC, output);
+        if (encryptionContext.usesPerBlockIV())
+            EncryptionUtils.encryptAndWrite(byteBuffer, channel, true, encryptionContext, globalCRC);
+        else
+            updateChecksum(globalCRC, EncryptionUtils.encryptAndWrite(byteBuffer, channel, true, cipher));
     }
 
     @VisibleForTesting

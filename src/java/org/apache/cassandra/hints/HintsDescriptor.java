@@ -88,6 +88,7 @@ final class HintsDescriptor
 
     private final Cipher cipher;
     private final ICompressor compressor;
+    private final EncryptionContext encryptionContext;
 
     HintsDescriptor(UUID hostId, int version, long timestamp, ImmutableMap<String, Object> parameters)
     {
@@ -103,6 +104,7 @@ final class HintsDescriptor
         {
             cipher = null;
             compressor = null;
+            encryptionContext = null;
         }
         else
         {
@@ -110,6 +112,7 @@ final class HintsDescriptor
                 throw new IllegalStateException("a hints file cannot be configured for both compression and encryption");
             cipher = encryption.cipher;
             compressor = encryption.compressor;
+            encryptionContext = encryption.encryptionContext;
             parameters = encryption.params;
         }
 
@@ -162,7 +165,18 @@ final class HintsDescriptor
             try
             {
                 Cipher cipher;
-                if (encryptionConfig.containsKey(EncryptionContext.ENCRYPTION_IV))
+                if (encryptionContext.usesPerBlockIV())
+                {
+                    cipher = null;
+                    ImmutableMap<String, Object> encParams = ImmutableMap.<String, Object>builder()
+                                                                         .putAll(encryptionContext.toHeaderParameters())
+                                                                         .build();
+
+                    Map<String, Object> map = new HashMap<>(params);
+                    map.put(ENCRYPTION, encParams);
+                    params = ImmutableMap.<String, Object>builder().putAll(map).build();
+                }
+                else if (encryptionConfig.containsKey(EncryptionContext.ENCRYPTION_IV))
                 {
                     cipher = encryptionContext.getDecryptor();
                 }
@@ -178,7 +192,7 @@ final class HintsDescriptor
                     map.put(ENCRYPTION, encParams);
                     params = ImmutableMap.<String, Object>builder().putAll(map).build();
                 }
-                return new EncryptionData(cipher, encryptionContext.getCompressor(), params);
+                return new EncryptionData(encryptionContext, cipher, encryptionContext.getCompressor(), params);
             }
             catch (IOException ioe)
             {
@@ -194,12 +208,14 @@ final class HintsDescriptor
 
     private static final class EncryptionData
     {
+        final EncryptionContext encryptionContext;
         final Cipher cipher;
         final ICompressor compressor;
         final ImmutableMap<String, Object> params;
 
-        private EncryptionData(Cipher cipher, ICompressor compressor, ImmutableMap<String, Object> params)
+        private EncryptionData(EncryptionContext encryptionContext, Cipher cipher, ICompressor compressor, ImmutableMap<String, Object> params)
         {
+            this.encryptionContext = encryptionContext;
             this.cipher = cipher;
             this.compressor = compressor;
             this.params = params;
@@ -327,7 +343,7 @@ final class HintsDescriptor
 
     public boolean isEncrypted()
     {
-        return cipher != null;
+        return encryptionContext != null;
     }
 
     public ICompressor createCompressor()
@@ -342,6 +358,11 @@ final class HintsDescriptor
     public Cipher getCipher()
     {
         return isEncrypted() ? cipher : null;
+    }
+
+    public EncryptionContext getEncryptionContext()
+    {
+        return encryptionContext;
     }
 
     @Override

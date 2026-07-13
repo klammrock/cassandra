@@ -104,6 +104,11 @@ public class EncryptionUtils
         return encryptAndWrite(inputBuffer, channel, allowBufferResize, encryptionContext.getEncryptor(), encryptionContext.usesPerBlockIV(), null);
     }
 
+    public static ByteBuffer encryptAndWrite(ByteBuffer inputBuffer, WritableByteChannel channel, boolean allowBufferResize, EncryptionContext encryptionContext, CRC32 crc) throws IOException
+    {
+        return encryptAndWrite(inputBuffer, channel, allowBufferResize, encryptionContext.getEncryptor(), encryptionContext.usesPerBlockIV(), crc);
+    }
+
     private static ByteBuffer encryptAndWrite(ByteBuffer inputBuffer, WritableByteChannel channel, boolean allowBufferResize, Cipher cipher, boolean writeIV, CRC32 crc) throws IOException
     {
         final int plainTextLength = inputBuffer.remaining();

@@ -20,8 +20,13 @@
  */
 package org.apache.cassandra.security;
 
+import java.io.IOException;
+import java.security.Key;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+
+import javax.crypto.spec.SecretKeySpec;
 
 import org.apache.cassandra.config.ParameterizedClass;
 import org.apache.cassandra.config.TransparentDataEncryptionOptions;
@@ -30,6 +35,12 @@ public class EncryptionContextGenerator
 {
     public static final String KEY_ALIAS_1 = "testing:1";
     public static final String KEY_ALIAS_2 = "testing:2";
+    private static final byte[] AES_256_KEY = new byte[32];
+
+    static
+    {
+        Arrays.fill(AES_256_KEY, (byte) 0x5a);
+    }
 
     public static EncryptionContext createContext(boolean init)
     {
@@ -52,8 +63,28 @@ public class EncryptionContextGenerator
         return new TransparentDataEncryptionOptions("AES/CBC/PKCS5Padding", KEY_ALIAS_1, keyProvider);
     }
 
+    public static TransparentDataEncryptionOptions createGCMEncryptionOptions()
+    {
+        ParameterizedClass keyProvider = new ParameterizedClass(StaticKeyProvider.class.getName(), new HashMap<>());
+        TransparentDataEncryptionOptions options = new TransparentDataEncryptionOptions("AES/GCM/NoPadding", KEY_ALIAS_1, keyProvider);
+        options.iv_length = 12;
+        return options;
+    }
+
     public static EncryptionContext createDisabledContext()
     {
         return new EncryptionContext();
+    }
+
+    public static class StaticKeyProvider implements KeyProvider
+    {
+        public StaticKeyProvider(TransparentDataEncryptionOptions options)
+        {
+        }
+
+        public Key getSecretKey(String keyAlias) throws IOException
+        {
+            return new SecretKeySpec(AES_256_KEY, "AES");
+        }
     }
 }

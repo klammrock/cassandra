@@ -162,37 +162,57 @@ public class SegmentReaderTest
     @Test
     public void encryptedSegmenterRead() throws IOException
     {
-        underlyingEncryptedSegmenterTest((s, t) -> readBytes(s, t));
+        underlyingEncryptedSegmenterTest((s, t) -> readBytes(s, t), false);
     }
 
     @Test
     public void encryptedSegmenterSeek() throws IOException
     {
-        underlyingEncryptedSegmenterTest((s, t) -> readBytesSeek(s, t));
+        underlyingEncryptedSegmenterTest((s, t) -> readBytesSeek(s, t), false);
     }
 
-    public void underlyingEncryptedSegmenterTest(BiFunction<FileDataInput, Integer, ByteBuffer> readFun)
+    @Test
+    public void encryptedGcmSegmenterRead() throws IOException
+    {
+        underlyingEncryptedSegmenterTest((s, t) -> readBytes(s, t), true);
+    }
+
+    @Test
+    public void encryptedGcmSegmenterSeek() throws IOException
+    {
+        underlyingEncryptedSegmenterTest((s, t) -> readBytesSeek(s, t), true);
+    }
+
+    public void underlyingEncryptedSegmenterTest(BiFunction<FileDataInput, Integer, ByteBuffer> readFun, boolean gcm)
             throws IOException
     {
-        EncryptionContext context = EncryptionContextGenerator.createContext(true);
-        CipherFactory cipherFactory = new CipherFactory(context.getTransparentDataEncryptionOptions());
+        EncryptionContext context = gcm
+                                    ? new EncryptionContext(EncryptionContextGenerator.createGCMEncryptionOptions())
+                                    : EncryptionContextGenerator.createContext(true);
+        CipherFactory cipherFactory = gcm ? null : new CipherFactory(context.getTransparentDataEncryptionOptions());
+
 
         int plainTextLength = (1 << 13) - 137;
         ByteBuffer plainTextBuffer = ByteBuffer.allocate(plainTextLength);
         random.nextBytes(plainTextBuffer.array());
 
         ByteBuffer compressedBuffer = EncryptionUtils.compress(plainTextBuffer, null, true, context.getCompressor());
-        Cipher cipher = cipherFactory.getEncryptor(context.getTransparentDataEncryptionOptions().cipher, context.getTransparentDataEncryptionOptions().key_alias);
+        Cipher cipher = gcm ? null : cipherFactory.getEncryptor(context.getTransparentDataEncryptionOptions().cipher, context.getTransparentDataEncryptionOptions().key_alias);
         File encryptedFile = FileUtils.createTempFile("encrypted-segment-", ".log");
         encryptedFile.deleteOnExit();
         FileChannel channel = encryptedFile.newReadWriteChannel();
         channel.write(ByteBufferUtil.bytes(plainTextLength));
-        EncryptionUtils.encryptAndWrite(compressedBuffer, channel, true, cipher);
+        if (gcm)
+            EncryptionUtils.encryptAndWrite(compressedBuffer, channel, true, context);
+        else
+            EncryptionUtils.encryptAndWrite(compressedBuffer, channel, true, cipher);
         channel.close();
 
         try (RandomAccessReader reader = RandomAccessReader.open(encryptedFile))
         {
-            context = EncryptionContextGenerator.createContext(cipher.getIV(), true);
+            context = gcm
+                      ? new EncryptionContext(EncryptionContextGenerator.createGCMEncryptionOptions())
+                      : EncryptionContextGenerator.createContext(cipher.getIV(), true);
             EncryptedSegmenter segmenter = new EncryptedSegmenter(reader, context);
             SyncSegment syncSegment = segmenter.nextSegment(0, (int) reader.length());
 

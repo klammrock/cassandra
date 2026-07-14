@@ -17,71 +17,46 @@
  */
 package org.apache.cassandra.hints;
 
-import java.util.Arrays;
-
-import javax.crypto.Cipher;
-
-import com.google.common.collect.ImmutableMap;
 import org.junit.Before;
-import org.junit.Test;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.security.EncryptionContext;
 import org.apache.cassandra.security.EncryptionContextGenerator;
 
-public class HintsEncryptionTest extends AlteredHints
+public class HintsGcmEncryptionTest extends HintsEncryptionTest
 {
-    EncryptionContext encryptionContext;
-    Cipher cipher;
-
     @Before
     public void setup()
     {
-        encryptionContext = EncryptionContextGenerator.createContext(true);
+        encryptionContext = new EncryptionContext(EncryptionContextGenerator.createGCMEncryptionOptions());
         DatabaseDescriptor.setEncryptionContext(encryptionContext);
     }
 
-    @Test
-    public void encryptedHints() throws Exception
-    {
-        multiFlushAndDeserializeTest();
-    }
-
+    @Override
     boolean looksLegit(HintsWriter writer)
     {
         if (!(writer instanceof EncryptedHintsWriter))
             return false;
 
-        EncryptedHintsWriter encryptedHintsWriter = (EncryptedHintsWriter)writer;
-        cipher = encryptedHintsWriter.getCipher();
-
-        return encryptedHintsWriter.getCompressor().getClass().isAssignableFrom(encryptionContext.getCompressor().getClass());
+        EncryptedHintsWriter encryptedHintsWriter = (EncryptedHintsWriter) writer;
+        return encryptedHintsWriter.getCipher() == null &&
+               encryptionContext.getCompressor().getClass().isInstance(encryptedHintsWriter.getCompressor());
     }
 
+    @Override
     boolean looksLegit(ChecksummedDataInput checksummedDataInput)
     {
         if (!(checksummedDataInput instanceof EncryptedChecksummedDataInput))
             return false;
 
-        EncryptedChecksummedDataInput encryptedDataInput = (EncryptedChecksummedDataInput)checksummedDataInput;
-
-        return Arrays.equals(cipher.getIV(), encryptedDataInput.getCipher().getIV()) &&
-               encryptedDataInput.getCompressor().getClass().isAssignableFrom(encryptionContext.getCompressor().getClass());
+        EncryptedChecksummedDataInput encryptedDataInput = (EncryptedChecksummedDataInput) checksummedDataInput;
+        return encryptedDataInput.getCipher() == null &&
+               encryptionContext.getCompressor().getClass().isInstance(encryptedDataInput.getCompressor());
     }
 
     @Override
     boolean checksumCoversEntireFile()
     {
-        return false;
-    }
-
-    ImmutableMap<String, Object> params()
-    {
-        ImmutableMap<String, Object> compressionParams = ImmutableMap.<String, Object>builder()
-                                                         .putAll(encryptionContext.toHeaderParameters())
-                                                         .build();
-        return ImmutableMap.<String, Object>builder()
-               .put(HintsDescriptor.ENCRYPTION, compressionParams)
-               .build();
+        return true;
     }
 }

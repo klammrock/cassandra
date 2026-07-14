@@ -17,6 +17,7 @@
  */
 package org.apache.cassandra.hints;
 
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -24,6 +25,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.CRC32;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.io.Files;
@@ -75,6 +77,11 @@ public abstract class AlteredHints
     abstract boolean looksLegit(HintsWriter writer);
     abstract boolean looksLegit(ChecksummedDataInput checksummedDataInput);
 
+    boolean checksumCoversEntireFile()
+    {
+        return true;
+    }
+
     public void multiFlushAndDeserializeTest() throws Exception
     {
         int hintNum = 0;
@@ -104,6 +111,9 @@ public abstract class AlteredHints
 
             Assert.assertThat(descriptor.hintsFileSize(dir), Matchers.greaterThan(0L));
         }
+
+        if (checksumCoversEntireFile())
+            verifyChecksum(dir, descriptor);
 
         try (HintsReader reader = HintsReader.open(descriptor.file(dir)))
         {
@@ -144,5 +154,28 @@ public abstract class AlteredHints
                 }
             }
         }
+    }
+
+    private static void verifyChecksum(File directory, HintsDescriptor descriptor) throws Exception
+    {
+        File hintsFile = descriptor.file(directory);
+        File checksumFile = descriptor.checksumFile(directory);
+
+        Assert.assertTrue(checksumFile.exists());
+        Assert.assertEquals(java.nio.file.Files.readAllLines(checksumFile.toPath()).iterator().next(),
+                            Integer.toHexString(calculateChecksum(hintsFile)));
+    }
+
+    private static int calculateChecksum(File file) throws Exception
+    {
+        CRC32 crc = new CRC32();
+        byte[] buffer = new byte[4096];
+        try (InputStream in = java.nio.file.Files.newInputStream(file.toPath()))
+        {
+            int read;
+            while ((read = in.read(buffer)) > 0)
+                crc.update(buffer, 0, read);
+        }
+        return (int) crc.getValue();
     }
 }

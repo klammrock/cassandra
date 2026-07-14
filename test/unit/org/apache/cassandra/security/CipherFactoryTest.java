@@ -79,6 +79,20 @@ public class CipherFactoryTest
         Assert.assertEquals(ULYSSEUS, new String(decrypted, Charsets.UTF_8));
     }
 
+    @Test
+    public void gcmRoundTripWith256BitKey() throws IOException, BadPaddingException, IllegalBlockSizeException
+    {
+        TransparentDataEncryptionOptions gcmOptions = EncryptionContextGenerator.createGCMEncryptionOptions();
+        CipherFactory gcmCipherFactory = new CipherFactory(gcmOptions);
+        Cipher encryptor = gcmCipherFactory.getEncryptor(gcmOptions.cipher, gcmOptions.key_alias);
+        byte[] original = ULYSSEUS.getBytes(Charsets.UTF_8);
+        byte[] encrypted = encryptor.doFinal(original);
+
+        Cipher decryptor = gcmCipherFactory.getDecryptor(gcmOptions.cipher, gcmOptions.key_alias, encryptor.getIV());
+        byte[] decrypted = decryptor.doFinal(encrypted);
+        Assert.assertEquals(ULYSSEUS, new String(decrypted, Charsets.UTF_8));
+    }
+
     private byte[] nextIV()
     {
         byte[] b = new byte[16];

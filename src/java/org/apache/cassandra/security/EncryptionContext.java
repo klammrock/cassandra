@@ -44,6 +44,8 @@ public class EncryptionContext
     public static final String ENCRYPTION_CIPHER = "encCipher";
     public static final String ENCRYPTION_KEY_ALIAS = "encKeyAlias";
     public static final String ENCRYPTION_IV = "encIV";
+    public static final String ENCRYPTION_IV_LENGTH = "encIVLength";
+    public static final int GCM_IV_LENGTH = 12;
 
     private final TransparentDataEncryptionOptions tdeOptions;
     private final ICompressor compressor;
@@ -66,6 +68,7 @@ public class EncryptionContext
     @VisibleForTesting
     public EncryptionContext(TransparentDataEncryptionOptions tdeOptions, byte[] iv, boolean init)
     {
+        validate(tdeOptions);
         this.tdeOptions = tdeOptions;
         compressor = LZ4Compressor.create(Collections.<String, String>emptyMap());
         chunkLength = tdeOptions.chunk_length_kb * 1024;
@@ -125,6 +128,11 @@ public class EncryptionContext
         return chunkLength;
     }
 
+    public int getIVLength()
+    {
+        return tdeOptions.iv_length;
+    }
+
     public byte[] getIV()
     {
         return iv;
@@ -169,6 +177,7 @@ public class EncryptionContext
         {
             map.put(ENCRYPTION_CIPHER, tdeOptions.cipher);
             map.put(ENCRYPTION_KEY_ALIAS, tdeOptions.key_alias);
+            map.put(ENCRYPTION_IV_LENGTH, Integer.toString(tdeOptions.iv_length));
 
             if (iv != null && iv.length > 0)
                 map.put(ENCRYPTION_IV, Hex.bytesToHex(iv));
@@ -192,7 +201,25 @@ public class EncryptionContext
             return new EncryptionContext(new TransparentDataEncryptionOptions(false));
 
         TransparentDataEncryptionOptions tdeOptions = new TransparentDataEncryptionOptions(cipher, keyAlias, encryptionContext.getTransparentDataEncryptionOptions().key_provider);
+        tdeOptions.iv_length = parseIVLength(parameters.get(ENCRYPTION_IV_LENGTH), encryptionContext, cipher);
         byte[] iv = ivString != null ? Hex.hexToBytes(ivString) : null;
         return new EncryptionContext(tdeOptions, iv, true);
+    }
+
+    private static void validate(TransparentDataEncryptionOptions tdeOptions)
+    {
+        if (tdeOptions.enabled && isAEAD(tdeOptions.cipher) && tdeOptions.iv_length != GCM_IV_LENGTH)
+            throw new ConfigurationException("transparent data encryption with AES/GCM/NoPadding requires iv_length: " + GCM_IV_LENGTH);
+    }
+
+    private static int parseIVLength(Object value, EncryptionContext encryptionContext, String cipher)
+    {
+        if (value == null)
+            return isAEAD(cipher) ? GCM_IV_LENGTH : encryptionContext.getTransparentDataEncryptionOptions().iv_length;
+
+        if (value instanceof Number)
+            return ((Number) value).intValue();
+
+        return Integer.parseInt(value.toString());
     }
 }

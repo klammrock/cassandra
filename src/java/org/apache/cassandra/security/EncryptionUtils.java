@@ -31,8 +31,6 @@ import javax.crypto.ShortBufferException;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 
-import io.netty.util.concurrent.FastThreadLocal;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.commitlog.EncryptedSegment;
 import org.apache.cassandra.io.compress.ICompressor;
@@ -54,14 +52,6 @@ public class EncryptionUtils
     public static final int ENCRYPTED_BLOCK_HEADER_SIZE = 8;
     private static final int ENCRYPTED_BLOCK_IV_LENGTH_SIZE = 4;
     private static final int MAX_ENCRYPTED_BLOCK_IV_LENGTH = 256;
-
-    private static final FastThreadLocal<ByteBuffer> reusableBuffers = new FastThreadLocal<ByteBuffer>()
-    {
-        protected ByteBuffer initialValue()
-        {
-            return ByteBuffer.allocate(ENCRYPTED_BLOCK_HEADER_SIZE);
-        }
-    };
 
     /**
      * Compress the raw data, as well as manage sizing of the {@code outputBuffer}; if the buffer is not big enough,
@@ -158,11 +148,6 @@ public class EncryptionUtils
         return encryptAndWrite(inputBuffer, new ChannelAdapter(outputBuffer), allowBufferResize, cipher);
     }
 
-    public static ByteBuffer decrypt(ReadableByteChannel channel, ByteBuffer outputBuffer, boolean allowBufferResize, EncryptionContext encryptionContext) throws IOException
-    {
-        return decrypt(channel, outputBuffer, allowBufferResize, null, encryptionContext);
-    }
-
     /**
      * Decrypt the input data, as well as manage sizing of the {@code outputBuffer}; if the buffer is not big enough,
      * deallocate current, and allocate a large enough buffer.
@@ -173,6 +158,11 @@ public class EncryptionUtils
     public static ByteBuffer decrypt(ReadableByteChannel channel, ByteBuffer outputBuffer, boolean allowBufferResize, Cipher cipher) throws IOException
     {
         return decrypt(channel, outputBuffer, allowBufferResize, cipher, null);
+    }
+
+    public static ByteBuffer decrypt(ReadableByteChannel channel, ByteBuffer outputBuffer, boolean allowBufferResize, EncryptionContext encryptionContext) throws IOException
+    {
+        return decrypt(channel, outputBuffer, allowBufferResize, null, encryptionContext);
     }
 
     private static ByteBuffer decrypt(ReadableByteChannel channel, ByteBuffer outputBuffer, boolean allowBufferResize, Cipher cipher, EncryptionContext encryptionContext) throws IOException

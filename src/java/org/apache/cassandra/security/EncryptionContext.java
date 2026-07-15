@@ -171,7 +171,7 @@ public class EncryptionContext
 
     public Map<String, String> toHeaderParameters()
     {
-        Map<String, String> map = new HashMap<>(3);
+        Map<String, String> map = new HashMap<>(4);
         // add compression options, someday ...
         if (tdeOptions.enabled)
         {

@@ -296,6 +296,38 @@ public class EncryptionUtilsTest
         new EncryptionContext(options);
     }
 
+    @Test(expected = ConfigurationException.class)
+    public void cbcEncryptorRejectedForNewEncryptedData() throws IOException
+    {
+        new EncryptionContext(EncryptionContextGenerator.createEncryptionOptions()).getEncryptor();
+    }
+
+    @Test(expected = ConfigurationException.class)
+    public void cbcEnabledConfigRejectedForNewEncryptedData()
+    {
+        EncryptionContext.validateForNewEncryptedData(EncryptionContextGenerator.createEncryptionOptions());
+    }
+
+    @Test
+    public void cbcDisabledConfigAllowedForExistingEncryptedData()
+    {
+        TransparentDataEncryptionOptions options = EncryptionContextGenerator.createEncryptionOptions();
+        options.enabled = false;
+
+        EncryptionContext.validateForNewEncryptedData(options);
+    }
+
+    @Test
+    public void cbcDecryptorAllowedForExistingEncryptedData() throws IOException
+    {
+        byte[] iv = new byte[16];
+        random.nextBytes(iv);
+
+        EncryptionContext encryptionContext = EncryptionContextGenerator.createContext(iv, true);
+        Assert.assertFalse(encryptionContext.usesPerBlockIV());
+        Assert.assertNotNull(encryptionContext.getDecryptor());
+    }
+
     @Test
     public void gcmReconstructedContextDefaultsToStandardIVLength()
     {

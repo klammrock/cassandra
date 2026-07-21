@@ -101,6 +101,7 @@ public class EncryptionContext
 
     public Cipher getEncryptor() throws IOException
     {
+        validateCipherForNewEncryptedData(tdeOptions.cipher);
         return cipherFactory.getEncryptor(tdeOptions.cipher, tdeOptions.key_alias);
     }
 
@@ -149,7 +150,20 @@ public class EncryptionContext
      */
     public static boolean isAEAD(String transformation)
     {
+        // isGCMCipher
         return transformation != null && transformation.toUpperCase(Locale.ROOT).contains("/GCM/");
+    }
+
+    public static boolean isCBCCipher(String transformation)
+    {
+        return transformation != null && transformation.toUpperCase(Locale.ROOT).contains("/CBC/");
+    }
+
+    public static void validateForNewEncryptedData(TransparentDataEncryptionOptions tdeOptions)
+    {
+        validate(tdeOptions);
+        if (tdeOptions.enabled)
+            validateCipherForNewEncryptedData(tdeOptions.cipher);
     }
 
     public TransparentDataEncryptionOptions getTransparentDataEncryptionOptions()
@@ -210,6 +224,12 @@ public class EncryptionContext
     {
         if (tdeOptions.enabled && isAEAD(tdeOptions.cipher) && tdeOptions.iv_length != GCM_IV_LENGTH)
             throw new ConfigurationException("transparent data encryption with AES/GCM/NoPadding requires iv_length: " + GCM_IV_LENGTH);
+    }
+
+    private static void validateCipherForNewEncryptedData(String cipher)
+    {
+        if (isCBCCipher(cipher))
+            throw new ConfigurationException("transparent data encryption with CBC ciphers is only supported for reading existing encrypted files; use AES/GCM/NoPadding for new encrypted data");
     }
 
     private static int parseIVLength(Object value, EncryptionContext encryptionContext, String cipher)

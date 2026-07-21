@@ -1265,6 +1265,7 @@ public class DatabaseDescriptor
     {
         // always attempt to load the cipher factory, as we could be in the situation where the user has disabled encryption,
         // but has existing commitlogs and sstables on disk that are still encrypted (and still need to be read)
+        EncryptionContext.validateForNewEncryptedData(conf.transparent_data_encryption_options);
         encryptionContext = new EncryptionContext(conf.transparent_data_encryption_options);
     }
 

@@ -17,10 +17,6 @@
  */
 package org.apache.cassandra.hints;
 
-import java.util.Arrays;
-
-import javax.crypto.Cipher;
-
 import com.google.common.collect.ImmutableMap;
 import org.junit.Before;
 import org.junit.Test;
@@ -32,12 +28,11 @@ import org.apache.cassandra.security.EncryptionContextGenerator;
 public class HintsEncryptionTest extends AlteredHints
 {
     EncryptionContext encryptionContext;
-    Cipher cipher;
 
     @Before
     public void setup()
     {
-        encryptionContext = EncryptionContextGenerator.createContext(true);
+        encryptionContext = new EncryptionContext(EncryptionContextGenerator.createGCMEncryptionOptions());
         DatabaseDescriptor.setEncryptionContext(encryptionContext);
     }
 
@@ -53,9 +48,8 @@ public class HintsEncryptionTest extends AlteredHints
             return false;
 
         EncryptedHintsWriter encryptedHintsWriter = (EncryptedHintsWriter)writer;
-        cipher = encryptedHintsWriter.getCipher();
-
-        return encryptedHintsWriter.getCompressor().getClass().isAssignableFrom(encryptionContext.getCompressor().getClass());
+        return encryptedHintsWriter.getCipher() == null &&
+               encryptionContext.getCompressor().getClass().isInstance(encryptedHintsWriter.getCompressor());
     }
 
     boolean looksLegit(ChecksummedDataInput checksummedDataInput)
@@ -65,14 +59,8 @@ public class HintsEncryptionTest extends AlteredHints
 
         EncryptedChecksummedDataInput encryptedDataInput = (EncryptedChecksummedDataInput)checksummedDataInput;
 
-        return Arrays.equals(cipher.getIV(), encryptedDataInput.getCipher().getIV()) &&
-               encryptedDataInput.getCompressor().getClass().isAssignableFrom(encryptionContext.getCompressor().getClass());
-    }
-
-    @Override
-    boolean checksumCoversEntireFile()
-    {
-        return false;
+        return encryptedDataInput.getCipher() == null &&
+               encryptionContext.getCompressor().getClass().isInstance(encryptedDataInput.getCompressor());
     }
 
     ImmutableMap<String, Object> params()

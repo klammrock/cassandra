@@ -60,7 +60,7 @@ public abstract class AlteredHints
                .build();
     }
 
-    private static Hint createHint(int idx, long baseTimestamp)
+    protected static Hint createHint(int idx, long baseTimestamp)
     {
         long timestamp = baseTimestamp + idx;
         return Hint.create(createMutation(idx, TimeUnit.MILLISECONDS.toMicros(timestamp)), timestamp);

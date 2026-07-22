@@ -24,9 +24,9 @@ public class TransparentDataEncryptionOptions
 {
     public boolean enabled = false;
     public int chunk_length_kb = 64;
-    public String cipher = "AES/CBC/PKCS5Padding";
+    public String cipher = "AES/GCM/NoPadding";
     public String key_alias;
-    public int iv_length = 16;
+    public int iv_length = 12;
 
     public ParameterizedClass key_provider;
 

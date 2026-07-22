@@ -36,8 +36,9 @@ import org.junit.Test;
 
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.TransparentDataEncryptionOptions;
+import org.apache.cassandra.db.partitions.PartitionUpdate;
 import org.apache.cassandra.io.util.DataOutputBuffer;
-import org.apache.cassandra.io.util.DataOutputBufferFixed;
+import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.io.util.File;
 import org.apache.cassandra.security.CipherFactory;
 import org.apache.cassandra.security.EncryptionContext;
@@ -163,18 +164,30 @@ public class HintsEncryptionTest extends AlteredHints
 
     private static void appendSerializedHint(ByteBuffer buffer, Hint hint, int messagingVersion) throws IOException
     {
-        int hintSize = (int) Hint.serializer.serializedSize(hint, messagingVersion);
-        CRC32 crc = new CRC32();
-        try (DataOutputBufferFixed out = new DataOutputBufferFixed(buffer))
+        try (DataOutputBuffer hintOutput = new DataOutputBuffer())
         {
-            out.writeInt(hintSize);
+            serializeHintForLegacyCBCFixture(hint, hintOutput, messagingVersion);
+
+            ByteBuffer serializedHint = hintOutput.buffer();
+            int hintSize = serializedHint.remaining();
+            CRC32 crc = new CRC32();
+            buffer.putInt(hintSize);
             updateChecksumInt(crc, hintSize);
-            out.writeInt((int) crc.getValue());
+            buffer.putInt((int) crc.getValue());
 
             int hintStart = buffer.position();
-            Hint.serializer.serialize(hint, out, messagingVersion);
+            buffer.put(serializedHint);
             updateChecksum(crc, buffer, hintStart, hintSize);
-            out.writeInt((int) crc.getValue());
+            buffer.putInt((int) crc.getValue());
         }
+    }
+
+    private static void serializeHintForLegacyCBCFixture(Hint hint, DataOutputPlus out, int messagingVersion) throws IOException
+    {
+        out.writeLong(hint.creationTime);
+        out.writeUnsignedVInt32(hint.gcgs);
+        out.writeUnsignedVInt32(hint.mutation.getPartitionUpdates().size());
+        for (PartitionUpdate partitionUpdate : hint.mutation.getPartitionUpdates())
+            PartitionUpdate.serializer.serialize(partitionUpdate, out, messagingVersion);
     }
 }

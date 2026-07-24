@@ -1,0 +1,111 @@
+• set -e
+  umask 077
+  STORE=/tmp/cassandra-tde-aes256.jceks
+  rm -f "$STORE"
+
+  keytool -genseckey \
+    -alias cassandra_tde_key \
+    -keyalg AES \
+    -keysize 256 \
+    -storetype JCEKS \
+    -keystore "$STORE" \
+    -storepass 'changeit-store-password' \
+    -keypass 'changeit-key-password'
+
+  base64 -w 0 "$STORE"
+
+
+  key_provider:
+    - class_name: org.apache.cassandra.security.JKSKeyInlineBase64Provider
+      parameters:
+        keystore:
+        "zs7OzgAAAAIAAAABAAAAAwARY2Fzc2FuZHJhX3RkZV9rZXkAAAGflS+wA6ztAAVzcgAzY29tLnN1bi5jcnlwdG8ucHJvdmlkZXIuU2VhbGVkT2JqZWN0Rm9yS2V5UHJvdGVjdG9yzVfKWecwu1MCAAB4cgAZamF2YXguY3J5cHRvLlNlYWxlZE9iamVjdD42PabDt1RwAgAEWwANZW5jb2RlZFB
+        hcmFtc3QAAltCWwAQZW5jcnlwdGVkQ29udGVudHEAfgACTAAJcGFyYW1zQWxndAASTGphdmEvbGFuZy9TdHJpbmc7TAAHc2VhbEFsZ3EAfgADeHB1cgACW0Ks8xf4BghU4AIAAHhwAAAAETAPBAiDEbolotQhywIDAw1AdXEAfgAFAAAAoAocJvK9xWHvqKgGOp5gkQdnEEFGBZxzbtLUGq3uASd
+        +AnRncRzTqKxPkhgS6VXZk2GV2SOz9jg2KZ+8CldYEpnpSpu4G9GqfDlTO6DxInYNL6/
+        EOOtJKHasoBBIbMa4g7pXaCRJjqIoW3x4pgUmN1+XDV2Zse5XKJVul2bO0kqk1HRQafcmIk+xcaNDe7loDtTUdahC6vIKutYtKGbNJZJ0ABZQQkVXaXRoTUQ1QW5kVHJpcGxlREVTdAAWUEJFV2l0aE1ENUFuZFRyaXBsZURFU5RqTaHV1PM/2nc8/tgAWAnRksqj"
+        keystore_password: "changeit-store-password"
+        store_type: "JCEKS"
+        key_password: "changeit-key-password"
+
+  Alias:
+
+  key_alias: cassandra_tde_key
+
+
+• store_type is passed directly to Java:
+
+  KeyStore.getInstance(store_type)
+
+  So valid values depend on the JDK/security providers available at runtime.
+
+  On this local Java 17 environment, supported KeyStore types are:
+
+  CaseExactJKS
+  DKS
+  JCEKS
+  JKS
+  PKCS12
+
+  For JKSKeyInlineBase64Provider with an AES secret key, the practical choices are:
+
+  store_type: "JCEKS"
+
+  or:
+
+  store_type: "PKCS12"
+
+  Use JCEKS if you want the traditional Cassandra TDE secret-key keystore format. Use PKCS12 if you want the modern standard Java keystore format.
+
+  I would avoid JKS for new AES secret-key configs unless you have tested it on every target JDK. DKS and CaseExactJKS are special-purpose and not a good default here.
+
+
+• set -e
+  umask 077
+  STORE=/tmp/cassandra-tde-aes256.p12
+  rm -f "$STORE"
+
+  keytool -genseckey \
+    -alias cassandra_tde_key \
+    -keyalg AES \
+    -keysize 256 \
+    -storetype PKCS12 \
+    -keystore "$STORE" \
+    -storepass 'changeit-store-password' \
+    -keypass 'changeit-store-password'
+
+  base64 -w 0 "$STORE"
+
+  Note: for PKCS12, Java typically expects the key password to be the same as the keystore password. In Cassandra config, you can omit key_password or set it equal to keystore_password.
+
+• Yes. A JCEKS or PKCS12 keystore can contain multiple AES secret keys, each under a different alias.
+
+  Example:
+
+  STORE=/tmp/cassandra-tde-keys.jceks
+  STOREPASS='changeit-store-password'
+
+  keytool -genseckey \
+    -alias key_v1 \
+    -keyalg AES \
+    -keysize 256 \
+    -storetype JCEKS \
+    -keystore "$STORE" \
+    -storepass "$STOREPASS" \
+    -keypass 'key-v1-password'
+
+  keytool -genseckey \
+    -alias key_v2 \
+    -keyalg AES \
+    -keysize 256 \
+    -storetype JCEKS \
+    -keystore "$STORE" \
+    -storepass "$STOREPASS" \
+    -keypass 'key-v2-password'
+
+  base64 -w 0 "$STORE"
+
+  Cassandra selects one key by key_alias:
+
+  key_alias: key_v1
+
+  If different entries have different key passwords, set key_password to the password for the alias Cassandra should load. For simpler operation, use the same password for all keys and the keystore.

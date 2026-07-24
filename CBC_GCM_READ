@@ -1,0 +1,120 @@
+• Yes. Do it as an upgrade-style test.
+
+  Use an older/pre-change build to create CBC commitlogs, then start current HEAD with GCM using the same data/commitlog dirs and the same keystore.
+
+  1. Make old worktree
+
+  OLD=/tmp/cassandra-cbc-old
+  NEW=/media/ext/projects/open_source/cassandra_5/cassandra
+  ROOT=/tmp/cassandra-cbc-gcm-test
+
+  git worktree add "$OLD" 2fb00a2074
+  JAVA_HOME=/usr/lib/jvm/java-17-openjdk ant -f "$OLD/build.xml" jar
+  JAVA_HOME=/usr/lib/jvm/java-17-openjdk ant -f "$NEW/build.xml" jar
+
+  2fb00a2074 is before CBC was made read-only for new writes.
+
+  2. Create shared dirs and key
+
+  rm -rf "$ROOT"
+  mkdir -p "$ROOT"/{data,commitlog,hints,saved_caches,cdc_raw,conf-cbc,conf-gcm}
+
+  keytool -genseckey \
+    -alias tde_aes_256 \
+    -keyalg AES \
+    -keysize 256 \
+    -storetype JCEKS \
+    -keystore "$ROOT/tde.jceks" \
+    -storepass cassandra \
+    -keypass cassandra
+
+  3. Create two configs
+
+  Copy old config twice:
+
+  cp -a "$OLD/conf/." "$ROOT/conf-cbc/"
+  cp -a "$NEW/conf/." "$ROOT/conf-gcm/"
+
+  In both cassandra.yaml files set the same directories:
+
+  hints_directory: /tmp/cassandra-cbc-gcm-test/hints
+  data_file_directories:
+    - /tmp/cassandra-cbc-gcm-test/data
+  commitlog_directory: /tmp/cassandra-cbc-gcm-test/commitlog
+  saved_caches_directory: /tmp/cassandra-cbc-gcm-test/saved_caches
+  cdc_raw_directory: /tmp/cassandra-cbc-gcm-test/cdc_raw
+
+  In conf-cbc/cassandra.yaml:
+
+  transparent_data_encryption_options:
+    enabled: true
+    chunk_length_kb: 64
+    cipher: AES/CBC/PKCS5Padding
+    key_alias: tde_aes_256
+    iv_length: 16
+    key_provider:
+      - class_name: org.apache.cassandra.security.JKSKeyProvider
+        parameters:
+          - keystore: /tmp/cassandra-cbc-gcm-test/tde.jceks
+            keystore_password: cassandra
+            store_type: JCEKS
+            key_password: cassandra
+
+  In conf-gcm/cassandra.yaml:
+
+  transparent_data_encryption_options:
+    enabled: true
+    chunk_length_kb: 64
+    cipher: AES/GCM/NoPadding
+    key_alias: tde_aes_256
+    iv_length: 12
+    key_provider:
+      - class_name: org.apache.cassandra.security.JKSKeyProvider
+        parameters:
+          - keystore: /tmp/cassandra-cbc-gcm-test/tde.jceks
+            keystore_password: cassandra
+            store_type: JCEKS
+            key_password: cassandra
+
+  4. Start old CBC Cassandra
+
+  Terminal 1:
+
+  CASSANDRA_CONF=/tmp/cassandra-cbc-gcm-test/conf-cbc "$OLD/bin/cassandra" -f
+
+  Terminal 2:
+
+  "$OLD/bin/cqlsh" -e "
+  CREATE KEYSPACE cbc_test WITH replication = {'class':'SimpleStrategy','replication_factor':1};
+  CREATE TABLE cbc_test.t (pk int PRIMARY KEY, v text);
+  INSERT INTO cbc_test.t (pk, v) VALUES (1, 'written-by-cbc');
+  "
+
+  Then kill the old process hard, not graceful shutdown:
+
+  pkill -9 -f "$OLD.*CassandraDaemon"
+
+  Check CBC header:
+
+  strings /tmp/cassandra-cbc-gcm-test/commitlog/CommitLog-*.log | grep 'AES/CBC'
+
+  5. Start current GCM Cassandra
+
+  CASSANDRA_CONF=/tmp/cassandra-cbc-gcm-test/conf-gcm "$NEW/bin/cassandra" -f
+
+  Verify old CBC replayed:
+
+  "$NEW/bin/cqlsh" -e "SELECT * FROM cbc_test.t WHERE pk = 1;"
+
+  Verify new GCM write works:
+
+  "$NEW/bin/cqlsh" -e "
+  INSERT INTO cbc_test.t (pk, v) VALUES (2, 'written-by-gcm');
+  SELECT * FROM cbc_test.t;
+  "
+
+  Check new commitlog header:
+
+  strings /tmp/cassandra-cbc-gcm-test/commitlog/CommitLog-*.log | grep 'AES/GCM'
+
+  Key points: generate CBC with old code, start current code with GCM, and keep the old CBC key alias available in the current key provider.

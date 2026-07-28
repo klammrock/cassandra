@@ -22,11 +22,14 @@ import java.io.IOException;
 import java.security.Key;
 import java.security.KeyStore;
 import java.util.Base64;
+import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.config.TransparentDataEncryptionOptions;
+
+import static java.util.Optional.ofNullable;
 
 /**
  * A {@code KeyProvider} that retrieves keys from an inline base64-encoded java keystore.
@@ -81,5 +84,19 @@ public class JKSKeyInlineBase64Provider implements KeyProvider
         if (key == null)
             throw new IOException(String.format("key %s was not found in keystore", keyAlias));
         return key;
+    }
+
+    public Key getSecretKey2(String keyAlias) throws IOException {
+        try {
+            Objects.requireNonNull(keyAlias, "key alias must not be null");
+            String password = options.get(PROP_KEY_PW);
+            String normalizedAlias = isJceks ? keyAlias.toLowerCase() : keyAlias;
+            if (password == null || password.isEmpty())
+                password = options.get(PROP_KEYSTORE_PW);
+            return ofNullable(store.getKey(normalizedAlias, password.toCharArray()))
+                   .orElseThrow(() -> new IOException(String.format("key %s was not found in keystore", normalizedAlias)));
+        } catch (Exception e) {
+            throw new IOException("unable to load key from keystore", e);
+        }
     }
 }

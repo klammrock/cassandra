@@ -118,3 +118,101 @@
   strings /tmp/cassandra-cbc-gcm-test/commitlog/CommitLog-*.log | grep 'AES/GCM'
 
   Key points: generate CBC with old code, start current code with GCM, and keep the old CBC key alias available in the current key provider.
+
+
+
+
+
+
+
+
+#
+transparent_data_encryption_options:
+  enabled: true
+  chunk_length_kb: 64
+  cipher: AES/CBC/PKCS5Padding
+  key_alias: tde_aes_256
+  # CBC IV length for AES needs to be 16 bytes (which is also the default size)
+  # iv_length: 16
+  key_provider:
+    - class_name: org.apache.cassandra.security.JKSKeyProvider
+      parameters:
+        - keystore: tde.jceks
+          keystore_password: cassandra
+          store_type: JCEKS
+          key_password: cassandra
+
+# default
+commitlog_directory: data/commitlog
+
+bin/cassasndra -f
+
+❯ head -n 1 data/commitlog/CommitLog-*.log
+==> data/commitlog/CommitLog-7-1785253750967.log <==
+�Z�u��������L7�=����%���R�wU�@�ZF�#c��ܦN��0��~@~o�rKV&�q�f364f9ea65aaf5a59425694d3b","encKeyAlias":"tde_aes_256"}����2�tzoٟ1�1��Z�=t<
+
+==> data/commitlog/CommitLog-7-1785253750968.log <==
+��jh�k{"encCipher":"AES/CBC/PKCS5Padding","encIV":"8fa1f41c21e096e50e59fadb7ef49b38","encKeyAlias":"tde_aes_256"}�8`%
+
+ps aux | grep org.apache.cassandra.service.CassandraDaemon
+
+bin/cqlsh
+CREATE KEYSPACE tde WITH replication = {'class':'SimpleStrategy','replication_factor':1};
+CREATE TABLE tde.t (k int PRIMARY KEY, v text);
+INSERT INTO tde.t (k, v) VALUES (1, 'init');
+
+SELECT * FROM tde.t;
+
+
+# not fast
+INSERT INTO tde.t (k, v) VALUES (2, 'commitlog');
+SELECT * FROM tde.t;
+# after sie changed - wait 10 sec
+ls -la commitlog
+kill -9 467283
+
+
+❯ head -n 1 data/commitlog/CommitLog-*.log
+==> ../data/commitlog/CommitLog-7-1785255376401.log <==
+���6k{"encCipher":"AES/CBC/PKCS5Padding","encIV":"7b38d99d6918fc0c3b9fb64cbd590a5c","encKeyAlias":"tde_aes_256"}X���K�a��S�7�7ʛ72l�*��w�����\��&߲4����n�5�������j�b�y�jR�=
+                                                                                                                                                                          x?��`�Y����0�>K&o|�%���.�����c�       N�K���F5���;�:�C�a��肛ԬR��sd���ꇣ��ϡh4�c�D���/$�'ba�����W�ʺfK�ck�h'��g�@Ց���b�
+                                                          fw����[�V�("ۘ_�
+                                                                         �uO�
+
+==> ../data/commitlog/CommitLog-7-1785255376402.log <==
+���6k{"encCipher":"AES/CBC/PKCS5Padding","encIV":"bf122f01f042d85e2e9ed760e374293a","encKeyAlias":"tde_aes_256"}�n'y%
+
+rollback cassandra.yaml
+git checkout gcm_cypher_support_codex_3
+rebuild to new ver
+ant realclean && ant jar
+
+# dont know, legacy->mmap, not works
+            logger.info(String.valueOf(config.diskAccessMode));
+            assert config.diskAccessMode == DiskAccessMode.standard;
+commitlog_disk_access_mode: standard
+
+transparent_data_encryption_options:
+  enabled: true
+  chunk_length_kb: 64
+  # Supported transformations are provided by the configured JCE provider. Cassandra supports
+  # AES/GCM/NoPadding with a per-block IV for new encrypted data.
+  # AES/CBC/PKCS5Padding is read-only for existing encrypted commitlogs and hints.
+  # For GCM, rotate keys well before 2^32 encrypted blocks are written with the same key.
+  cipher: AES/GCM/NoPadding
+  key_alias: tde_aes_256
+  # CBC IV length for AES needs to be 16 bytes (which is also the default size)
+  # GCM IV length should be 12 bytes.
+  #iv_length: 12
+  key_provider:
+    - class_name: org.apache.cassandra.security.JKSKeyProvider
+      parameters:
+        - keystore: tde.jceks
+          keystore_password: cassandra
+          store_type: JCEKS
+          key_password: cassandra
+
+
+
+# todo hints
+

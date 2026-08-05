@@ -18,3 +18,71 @@
 
   That is specifically documented to make read-only tooling, including nodetool status, work. See doc/modules/cassandra/pages/managing/operating/security.adoc:526. The permission mapping is in src/java/org/apache/cassandra/auth/
   jmx/AuthorizationProxy.java:418: attributes need SELECT, setters need MODIFY, operations need EXECUTE.
+
+
+
+
+
+
+
+Under a readonly JMX role (jmxremote.access), MBeanServerAccessController permits getAttribute(s), queryNames/queryMBeans, getMBeanInfo, isInstanceOf, addNotificationListener — and blocks invoke, setAttribute(s), createMBean. Cassandra's own JMX authorizer maps the same split (src/java/org/apache/cassandra/auth/jmx/AuthorizationProxy.java:422): getAttribute→SELECT, setAttribute→MODIFY, invoke→EXECUTE, queryNames/getMBeanInfo→DESCRIBE.
+
+NodeProbe reaches the server through JMX.newMBeanProxy, and MBeanServerInvocationHandler decides attribute-vs-invoke purely from the Java interface signature: a no-arg getX()/isX() returning non-void is an attribute read; everything else — including any getter that takes an argument — is invoke. That's the whole discriminator.
+
+NodeProbe.connect() itself is safe: proxy creation is lazy, and the only server calls are isInstanceOf via newPlatformMXBeanProxy.
+
+Works read-only (37 of 145 commands)
+
+version          info             gossipinfo        failuredetector
+netstats         tpstats          tablestats        tablehistograms
+proxyhistograms  compactionstats  compactionhistory gcstats
+datapaths        cidrfilteringstats
+statusgossip     statusbinary     statusbackup      statushandoff
+getauditlog      getfullquerylog  getlogginglevels  getseeds
+getauthcacheconfig      getautorepairconfig    getbatchlogreplaythrottle
+getcolumnindexsize      getcompactionthreshold getcompactionthroughput
+getconcurrentcompactors getconcurrentviewbuilders  getdefaultrf
+getinterdcstreamthroughput  getmaxhintwindow   getsnapshotthrottle
+getstreamthroughput     gettimeout             gettraceprobability
+
+Plus clientstats — but only without --clear-history (that flag calls ssProxy.clearConnectionHistory).
+
+Read-looking commands that are blocked
+
+These are the ones that surprise people — they read data but do it through an invoke:
+
+┌──────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────┐
+│       Command        │                                          Blocked call                                          │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ status, ring         │ ssProxy.effectiveOwnershipWithPort(keyspace), plus EndpointSnitchInfoMBean.getDatacenter(host) │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ describecluster      │ effectiveOwnershipWithPort, getKeyspaceReplicationInfo(ks)                                     │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ describering         │ describeRingJMX(keyspace)                                                                      │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ listsnapshots        │ getSnapshotDetails(options), trueSnapshotsSize() — no get prefix                               │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ listpendinghints     │ epSnitchInfo.getRack(address) / getDatacenter(address) (ListPendingHints.java:74)              │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ getendpoints         │ getNaturalEndpointsWithPort(ks, cf, key)                                                       │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ getsstables          │ cfsProxy.getSSTablesForKey(key)                                                                │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ getconcurrency       │ ssProxy.getConcurrency(List) — arg makes it an operation                                       │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ statusautocompaction │ getAutoCompactionStatus(ks, tables)                                                            │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ viewbuildstatus      │ getViewBuildStatuses(ks, view)                                                                 │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ toppartitions        │ extends ProfileLoad → samplePartitions                                                         │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ repairadmin list     │ getRepairServiceProxy().getSessions(all, range)                                                │
+└──────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Note status only catches IllegalStateException around the ownership call (Status.java:80), so the SecurityException propagates and the command fails outright rather than degrading.
+
+Two caveats worth knowing:
+
+- gcstats mutates state. It calls gcProxy.getAndResetStats() — a no-arg getter, so JMX exposes it as attribute AndResetStats. A readonly user reading it resets the node's GC counters, clobbering them for anyone else polling.
+- queryNames dependency. tablestats, tpstats, tablehistograms, compactionstats, datapaths, getcompactionthreshold enumerate MBeans first. Fine under file-based readonly, but under Cassandra's internal JMX authorizer a role granted only SELECT and not DESCRIBE will fail on these.
+

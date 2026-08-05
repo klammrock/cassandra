@@ -22,6 +22,38 @@
 
 
 
+ how allow readonly jmx user1 nodetool status operation?
+
+
+• Use Cassandra integrated JMX authorization, then grant user1 the read permissions plus the two EXECUTE grants that nodetool status needs.
+
+  In cqlsh as a superuser:
+
+  CREATE ROLE IF NOT EXISTS jmx_readonly WITH LOGIN = false;
+
+  GRANT SELECT ON ALL MBEANS TO jmx_readonly;
+  GRANT DESCRIBE ON ALL MBEANS TO jmx_readonly;
+
+  GRANT EXECUTE ON MBEAN 'org.apache.cassandra.db:type=EndpointSnitchInfo' TO jmx_readonly;
+  GRANT EXECUTE ON MBEAN 'org.apache.cassandra.db:type=StorageService' TO jmx_readonly;
+
+  GRANT jmx_readonly TO user1;
+
+  Then run:
+
+  bin/nodetool -u user1 -pw '<password>' status
+
+  If user1 already has an active JMX permissions cache entry, either wait for cache expiry or invalidate it as an admin:
+
+  bin/nodetool invalidatejmxpermissionscache user1
+
+  Make sure Cassandra is using integrated JMX authz, not only the JDK jmxremote.access file. In cassandra-env.sh, this is the relevant setting:
+
+  JVM_OPTS="$JVM_OPTS -Dcassandra.jmx.authorizer=org.apache.cassandra.auth.jmx.AuthorizationProxy"
+
+  Caveat: EXECUTE ON MBEAN 'org.apache.cassandra.db:type=StorageService' is broader than just status; Cassandra authorizes JMX operation execution at the MBean level, not per operation.
+
+
 
 
 

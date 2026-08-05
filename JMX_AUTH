@@ -1,0 +1,20 @@
+ Depends which “read-only JMX” you mean.
+
+  For the JDK jmxremote.access readonly role, nodetool only works for commands that use JMX attribute reads/metadata. Common ones that should work in this checkout:
+
+  version, info, netstats, tpstats, tablestats, tablehistograms, datapaths, proxyhistograms, compactionhistory, compactionstats, clientstats without --clear-history, gcstats, gossipinfo, failuredetector, cidrfilteringstats,
+  getauthcacheconfig, getautorepairconfig, getauditlog, getbatchlogreplaythrottle, getcolumnindexsize, getcompactionthreshold, getcompactionthroughput, getconcurrentcompactors, getconcurrentviewbuilders, getdefaultrf,
+  getfullquerylog, getinterdcstreamthroughput, getlogginglevels, getmaxhintwindow, getseeds, getsnapshotthrottle, getstreamthroughput, gettimeout, gettraceprobability, getguardrailsconfig, statusbackup, statusbinary,
+  statusgossip, statushandoff.
+
+  Commands like status, ring, and describecluster are “read-like” but call JMX operations such as effectiveOwnershipWithPort, so a plain JDK readonly user can fail there.
+
+  For Cassandra integrated JMX authorization, the docs recommend:
+
+  GRANT SELECT ON ALL MBEANS TO jmx;
+  GRANT DESCRIBE ON ALL MBEANS TO jmx;
+  GRANT EXECUTE ON MBEAN 'org.apache.cassandra.db:type=EndpointSnitchInfo' TO jmx;
+  GRANT EXECUTE ON MBEAN 'org.apache.cassandra.db:type=StorageService' TO jmx;
+
+  That is specifically documented to make read-only tooling, including nodetool status, work. See doc/modules/cassandra/pages/managing/operating/security.adoc:526. The permission mapping is in src/java/org/apache/cassandra/auth/
+  jmx/AuthorizationProxy.java:418: attributes need SELECT, setters need MODIFY, operations need EXECUTE.
